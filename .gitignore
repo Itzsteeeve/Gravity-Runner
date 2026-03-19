@@ -1,0 +1,9 @@
+# Python cache
+__pycache__/
+*.py[cod]
+
+# PyInstaller artifacts
+build/
+
+# Personal IDE settings
+.vscode/settings.json
