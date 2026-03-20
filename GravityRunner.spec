@@ -2,7 +2,8 @@
 
 from pathlib import Path
 
-project_dir = Path(__file__).resolve().parent
+# PyInstaller exec()s this file; __file__ is not set — use injected SPECPATH.
+project_dir = Path(SPECPATH)
 music_file = project_dir / "assets" / "menu_music.mp3"
 datas = [(str(music_file), "assets")] if music_file.exists() else []
 

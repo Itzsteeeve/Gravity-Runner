@@ -1,0 +1,38 @@
+name: Build Windows EXE
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Warn if menu music missing
+        shell: bash
+        run: |
+          if [ ! -f "assets/menu_music.mp3" ]; then
+            echo "WARNING: assets/menu_music.mp3 is missing. Build will still succeed, but menu music will not play."
+          fi
+
+      - name: Build with PyInstaller
+        run: |
+          pyinstaller --clean --noconfirm GravityRunner.spec
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: GravityRunner-windows
+          path: dist/GravityRunner.exe
