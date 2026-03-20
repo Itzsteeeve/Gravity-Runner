@@ -17,6 +17,8 @@ from .config import (
     TEXT_MAIN,
 )
 
+_BG_STATIC_CACHE: dict[tuple[int, int], tuple[pygame.Surface, pygame.Surface]] = {}
+
 
 @dataclass
 class NeonFonts:
@@ -74,25 +76,32 @@ def fit_text(font: pygame.font.Font, text: str, max_width: int) -> str:
 def draw_background(surf: pygame.Surface, time_s: float) -> None:
     surf.fill(BG_DARK)
     w, h = surf.get_size()
-    # Layer 1: slow parallax grid.
-    step_far = 52
-    off_far = int((time_s * 36) % step_far)
-    for x in range(-step_far, w + step_far, step_far):
-        xx = x + off_far
-        pygame.draw.line(surf, (14, 34, 54), (xx, 0), (xx, h), 1)
-    for y in range(-step_far, h + step_far, step_far):
-        yy = y + off_far
-        pygame.draw.line(surf, (14, 34, 54), (0, yy), (w, yy), 1)
+    cache_key = (w, h)
+    cached = _BG_STATIC_CACHE.get(cache_key)
+    if cached is None:
+        grid = pygame.Surface((w, h), pygame.SRCALPHA)
+        # Layer 1: slow parallax grid.
+        step_far = 52
+        for x in range(-step_far, w + step_far, step_far):
+            pygame.draw.line(grid, (14, 34, 54, 130), (x, 0), (x, h), 1)
+        for y in range(-step_far, h + step_far, step_far):
+            pygame.draw.line(grid, (14, 34, 54, 130), (0, y), (w, y), 1)
 
-    # Layer 2: faster foreground grid.
-    step_near = 34
-    off_near = int((time_s * 78) % step_near)
-    for x in range(-step_near, w + step_near, step_near):
-        xx = x + off_near
-        pygame.draw.line(surf, (24, 62, 96), (xx, 0), (xx, h), 1)
-    for y in range(-step_near, h + step_near, step_near):
-        yy = y + off_near
-        pygame.draw.line(surf, (24, 62, 96), (0, yy), (w, yy), 1)
+        # Layer 2: denser near grid.
+        step_near = 34
+        for x in range(-step_near, w + step_near, step_near):
+            pygame.draw.line(grid, (24, 62, 96, 90), (x, 0), (x, h), 1)
+        for y in range(-step_near, h + step_near, step_near):
+            pygame.draw.line(grid, (24, 62, 96, 90), (0, y), (w, y), 1)
+
+        vig = pygame.Surface((w, h), pygame.SRCALPHA)
+        for i in range(18):
+            alpha = int(8 + i * 2.7)
+            pygame.draw.rect(vig, (0, 0, 0, alpha), pygame.Rect(i * 9, i * 6, w - i * 18, h - i * 12), width=5)
+        _BG_STATIC_CACHE[cache_key] = (grid, vig)
+        cached = (grid, vig)
+    grid, vig = cached
+    surf.blit(grid, (0, 0))
 
     # Animated neon light bands.
     bands = pygame.Surface((w, h), pygame.SRCALPHA)
@@ -101,12 +110,6 @@ def draw_background(surf: pygame.Surface, time_s: float) -> None:
         pygame.draw.line(bands, (*NEON_BLUE, 26), (0, y), (w, y + 14), 3)
         pygame.draw.line(bands, (*NEON_PINK, 18), (0, y + 8), (w, y - 6), 2)
     surf.blit(bands, (0, 0))
-
-    # Vignette for depth.
-    vig = pygame.Surface((w, h), pygame.SRCALPHA)
-    for i in range(22):
-        alpha = int(6 + i * 2.4)
-        pygame.draw.rect(vig, (0, 0, 0, alpha), pygame.Rect(i * 8, i * 5, w - i * 16, h - i * 10), width=6)
     surf.blit(vig, (0, 0))
 
 
@@ -645,6 +648,8 @@ def draw_hud(
     difficulty_label: str,
     score_multiplier: int,
     credits: int,
+    active_event_label: str | None = None,
+    active_event_remaining_s: float = 0.0,
 ) -> None:
     draw_neon_text(
         surf,
@@ -696,16 +701,16 @@ def draw_hud(
         center=False,
     )
 
-    # Phase label (debug-ish but subtle)
-    draw_neon_text(
-        surf,
-        phase_name.upper(),
-        (LOGICAL_WIDTH - 220, 18),
-        fonts.small,
-        main_color=(160, 210, 255),
-        outline_color=(60, 110, 255),
-        center=False,
-    )
+    if active_event_label:
+        draw_neon_text(
+            surf,
+            f"EVENT {active_event_label} {active_event_remaining_s:0.1f}s",
+            (LOGICAL_WIDTH - 350, 74),
+            fonts.small,
+            main_color=(255, 226, 140),
+            outline_color=NEON_PINK,
+            center=False,
+        )
 
 
 def draw_game_over(

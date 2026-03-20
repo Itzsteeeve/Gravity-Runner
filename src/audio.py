@@ -62,6 +62,7 @@ def _make_noise_burst(
 class SfxBank:
     flip: pygame.mixer.Sound
     death: pygame.mixer.Sound
+    event_start: pygame.mixer.Sound
 
     @staticmethod
     def create() -> "SfxBank":
@@ -75,10 +76,12 @@ class SfxBank:
         # instead we keep it short and punchy.
         death_noise = _make_noise_burst(duration_s=0.26, volume=0.55, sample_rate=sample_rate)
         death_bytes = death_noise
+        event_bytes = _make_chirp(f0=240.0, f1=760.0, duration_s=0.14, volume=0.42, sample_rate=sample_rate)
 
         flip = pygame.mixer.Sound(buffer=flip_bytes)
         death = pygame.mixer.Sound(buffer=death_bytes)
-        return SfxBank(flip=flip, death=death)
+        event_start = pygame.mixer.Sound(buffer=event_bytes)
+        return SfxBank(flip=flip, death=death, event_start=event_start)
 
     def play_flip(self, volume: float) -> None:
         v = max(0.0, min(1.0, volume))
@@ -89,4 +92,9 @@ class SfxBank:
         v = max(0.0, min(1.0, volume))
         self.death.set_volume(v)
         self.death.play()
+
+    def play_event_start(self, volume: float) -> None:
+        v = max(0.0, min(1.0, volume))
+        self.event_start.set_volume(v)
+        self.event_start.play()
 

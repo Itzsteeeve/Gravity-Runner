@@ -16,6 +16,8 @@ class Player:
     y: float
     vy: float = 0.0
     gravity_sign: float = 1.0  # +1 means down, -1 means up.
+    contact_release_s: float = 0.0
+    contact_boundary: int = 0  # -1 ceiling, +1 floor, 0 none
 
     def flip_gravity(self) -> None:
         self.gravity_sign *= -1.0
@@ -25,10 +27,14 @@ class Player:
         self.y = y
         self.vy = 0.0
         self.gravity_sign = 1.0
+        self.contact_release_s = 0.0
+        self.contact_boundary = 0
 
-    def update(self, dt: float, ceiling_y: float, floor_y: float) -> None:
+    def update(self, dt: float, ceiling_y: float, floor_y: float, gravity_scale: float = 1.0) -> None:
+        if self.contact_release_s > 0.0:
+            self.contact_release_s = max(0.0, self.contact_release_s - dt)
         # Gravity acceleration in screen coordinates.
-        self.vy += GRAVITY_PX_S2 * self.gravity_sign * dt
+        self.vy += GRAVITY_PX_S2 * self.gravity_sign * max(0.2, gravity_scale) * dt
         self.y += self.vy * dt
 
         # Collide with bounds (simple "ground" and "ceiling").
@@ -36,16 +42,28 @@ class Player:
         if self.gravity_sign > 0.0:
             # Floor is at larger y.
             if self.y + PLAYER_RADIUS > floor_y:
-                self.y = floor_y - PLAYER_RADIUS
-                # Avoid "sticky" contact: push velocity slightly away from the boundary.
+                penetration = (self.y + PLAYER_RADIUS) - floor_y
+                self.y = floor_y - PLAYER_RADIUS - max(0.0, penetration)
+                # Avoid sticky contact: enforce outward velocity for a short grace period.
                 rebound = -self.vy * BOUNCE_DAMPING
-                self.vy = min(rebound, -35.0)
+                self.vy = min(rebound, -125.0)
+                self.contact_release_s = 0.055
+                self.contact_boundary = 1
+            elif self.contact_boundary == 1 and self.contact_release_s > 0.0 and self.y + PLAYER_RADIUS >= floor_y - 0.75:
+                self.vy = min(self.vy, -125.0)
         else:
             if self.y - PLAYER_RADIUS < ceiling_y:
-                self.y = ceiling_y + PLAYER_RADIUS
-                # Avoid "sticky" contact: push velocity slightly away from the boundary.
+                penetration = ceiling_y - (self.y - PLAYER_RADIUS)
+                self.y = ceiling_y + PLAYER_RADIUS + max(0.0, penetration)
+                # Avoid sticky contact: enforce outward velocity for a short grace period.
                 rebound = -self.vy * BOUNCE_DAMPING
-                self.vy = max(rebound, 35.0)
+                self.vy = max(rebound, 125.0)
+                self.contact_release_s = 0.055
+                self.contact_boundary = -1
+            elif self.contact_boundary == -1 and self.contact_release_s > 0.0 and self.y - PLAYER_RADIUS <= ceiling_y + 0.75:
+                self.vy = max(self.vy, 125.0)
+        if self.contact_release_s <= 0.0:
+            self.contact_boundary = 0
 
         # Keep y in hard bounds even if something goes odd.
         self.y = clamp(self.y, ceiling_y + PLAYER_RADIUS, floor_y - PLAYER_RADIUS)

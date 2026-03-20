@@ -55,6 +55,8 @@ class LevelGenerator:
         camera_x: float,
         ceiling_y: float,
         floor_y: float,
+        event_name: str | None = None,
+        event_strength: float = 0.0,
     ) -> None:
         progress = max(0.0, camera_x / 22000.0) * self.difficulty_progress_multiplier
         diff = difficulty_from_progress(progress)
@@ -66,11 +68,27 @@ class LevelGenerator:
         # Spawn ahead.
         max_x_want = camera_x + SPAWN_AHEAD_PX
         while self.next_gate_x < max_x_want:
-            self._spawn_pattern(camera_x=self.next_gate_x, diff=diff, ceiling_y=ceiling_y, floor_y=floor_y)
+            self._spawn_pattern(
+                camera_x=self.next_gate_x,
+                diff=diff,
+                ceiling_y=ceiling_y,
+                floor_y=floor_y,
+                event_name=event_name,
+                event_strength=event_strength,
+            )
 
-    def _spawn_pattern(self, camera_x: float, diff: Difficulty, ceiling_y: float, floor_y: float) -> None:
+    def _spawn_pattern(
+        self,
+        camera_x: float,
+        diff: Difficulty,
+        ceiling_y: float,
+        floor_y: float,
+        event_name: str | None = None,
+        event_strength: float = 0.0,
+    ) -> None:
         rng = random.Random(self.seed + int(camera_x // 1))
         lane = self._choose_lane(rng)
+        start_gate_i = len(self.gates)
 
         # Choose gap height based on current difficulty.
         gap_height = rng.uniform(diff.gap_height_min, diff.gap_height_max)
@@ -92,6 +110,12 @@ class LevelGenerator:
                 center = rng.uniform((min_center + max_center) / 2.0, max_center)
 
         gate_width = diff.gate_width
+        event_strength = max(0.0, min(1.0, event_strength))
+        if event_name == "pulse_gates":
+            pulse = 0.76 + 0.18 * (0.5 + 0.5 * rng.random()) * (0.7 + 0.6 * event_strength)
+            gap_height *= pulse
+        if event_name == "pulse_gates":
+            gate_width *= 1.08
 
         def spike_pick() -> tuple[int, int, int]:
             return self.skin.spike_a if rng.random() < 0.5 else self.skin.spike_b
@@ -154,6 +178,23 @@ class LevelGenerator:
                     )
                 )
                 spacing = rng.uniform(diff.gate_spacing_px * 0.78, diff.gate_spacing_px * 0.96)
+            elif pattern_roll < 0.58:
+                self.gates.append(
+                    Gate(
+                        x_world=self.next_gate_x,
+                        width=gate_width * 1.0,
+                        gap_center_y=center,
+                        gap_height=gap_height * 0.92,
+                        wall_color=self.skin.gate_wall,
+                        outline_color=self.skin.gate_outline,
+                        spike_color=spike_pick(),
+                        kind="phase",
+                        move_amp=rng.uniform(18.0, 28.0),
+                        move_speed=rng.uniform(1.7, 2.4),
+                        move_phase=rng.uniform(0.0, 6.28),
+                    )
+                )
+                spacing = rng.uniform(diff.gate_spacing_px * 0.84, diff.gate_spacing_px * 0.98)
             elif pattern_roll < 0.72:
                 # Tunnel-like pair.
                 self.gates.append(
@@ -211,6 +252,23 @@ class LevelGenerator:
                     )
                 )
                 spacing = rng.uniform(diff.gate_spacing_px * 0.9, diff.gate_spacing_px * 1.08)
+            elif pattern_roll < 0.40:
+                self.gates.append(
+                    Gate(
+                        x_world=self.next_gate_x,
+                        width=gate_width * 1.0,
+                        gap_center_y=center,
+                        gap_height=gap_height * 0.96,
+                        wall_color=self.skin.gate_wall,
+                        outline_color=self.skin.gate_outline,
+                        spike_color=spike_pick(),
+                        kind="phase",
+                        move_amp=rng.uniform(12.0, 22.0),
+                        move_speed=rng.uniform(1.3, 1.9),
+                        move_phase=rng.uniform(0.0, 6.28),
+                    )
+                )
+                spacing = rng.uniform(diff.gate_spacing_px * 0.95, diff.gate_spacing_px * 1.1)
             elif pattern_roll < 0.45:
                 self.gates.append(
                     Gate(
@@ -249,5 +307,14 @@ class LevelGenerator:
                 )
                 spacing = rng.uniform(diff.gate_spacing_px * 0.88, diff.gate_spacing_px * 1.1)
 
+        if event_name == "pulse_gates":
+            spacing *= 0.86 + 0.06 * (1.0 - event_strength)
+            # Convert newly spawned gates into pulse gates for strong visual/gameplay identity.
+            for g in self.gates[start_gate_i:]:
+                if g.kind == "moving":
+                    continue
+                g.kind = "pulse"
+                g.move_speed = rng.uniform(2.2, 3.4)
+                g.move_phase = rng.uniform(0.0, 6.28)
         self.next_gate_x += spacing
 

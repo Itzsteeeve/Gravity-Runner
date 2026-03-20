@@ -9,6 +9,7 @@ from typing import Optional, Set
 import pygame
 
 from src.config import (
+    BG_DARK,
     FPS,
     LOGICAL_HEIGHT,
     LOGICAL_WIDTH,
@@ -206,6 +207,16 @@ class GravityRunner:
         self.prev_gravity_sign = self.player.gravity_sign
         self.screen_shake_timer = 0.0
         self.screen_shake_strength = 0.0
+        self.dt_smooth = 1.0 / FPS
+
+        # Challenge events (A-update): lightweight runtime state.
+        self.active_event_name: Optional[str] = None
+        self.active_event_timer = 0.0
+        self.active_event_intro_timer = 0.0
+        self._event_seed = 0
+        self.next_event_score_target = 1000 if self.difficulty_mode == "hard" else 2000
+        self.event_low_gravity_scale = 1.0
+        self.event_pulse_strength = 0.0
 
         # Boundaries (player collisions)
         self.ceiling_y = 80
@@ -226,6 +237,13 @@ class GravityRunner:
         self.prev_gravity_sign = self.player.gravity_sign
         self.screen_shake_timer = 0.0
         self.screen_shake_strength = 0.0
+        self.active_event_name = None
+        self.active_event_timer = 0.0
+        self.active_event_intro_timer = 0.0
+        self._event_seed += 1
+        self.next_event_score_target = 1000 if self.difficulty_mode == "hard" else 2000
+        self.event_low_gravity_scale = 1.0
+        self.event_pulse_strength = 0.0
         self.particles = ParticleSystem()
         self.player.reset(x=float(PLAYER_X), y=LOGICAL_HEIGHT / 2.0)
         self.generator = LevelGenerator.create(
@@ -235,6 +253,51 @@ class GravityRunner:
             self.difficulty_mode,
         )
         self.phase = GamePhase.running
+
+    def _update_runtime_event(self, dt: float) -> None:
+        if self.phase != GamePhase.running:
+            return
+        self.active_event_intro_timer = max(0.0, self.active_event_intro_timer - dt)
+        if self.active_event_name is not None:
+            self.active_event_timer = max(0.0, self.active_event_timer - dt)
+            if self.active_event_name == "low_gravity":
+                self.event_low_gravity_scale = 0.66
+            else:
+                self.event_low_gravity_scale = 1.0
+            if self.active_event_name == "pulse_gates":
+                p = 0.5 + 0.5 * math.sin((pygame.time.get_ticks() / 1000.0) * 5.4)
+                self.event_pulse_strength = 0.35 + 0.45 * p
+            else:
+                self.event_pulse_strength = 0.0
+            if self.active_event_timer <= 0.0:
+                self.active_event_name = None
+                self.event_low_gravity_scale = 1.0
+                self.event_pulse_strength = 0.0
+            return
+
+        # Events are disabled on easy.
+        if self.difficulty_mode == "easy":
+            self.event_low_gravity_scale = 1.0
+            self.event_pulse_strength = 0.0
+            return
+
+        # Trigger event every 2k score.
+        if self.score < self.next_event_score_target:
+            return
+        score_step = 1000 if self.difficulty_mode == "hard" else 2000
+        while self.score >= self.next_event_score_target:
+            self.next_event_score_target += score_step
+        selector = int((self.distance / 340.0) + (self.seed + self._event_seed)) % 2
+        self.active_event_name = "pulse_gates" if selector == 0 else "low_gravity"
+        self.active_event_timer = 8.6 if self.active_event_name == "pulse_gates" else 5.6
+        self.active_event_intro_timer = 1.1
+        self.screen_shake_timer = max(self.screen_shake_timer, 0.16)
+        self.screen_shake_strength = max(self.screen_shake_strength, 4.0 * self.fx_intensity)
+        if self.sound_enabled and self.sfx is not None:
+            try:
+                self.sfx.play_event_start(min(1.0, self.sfx_volume + 0.12))
+            except Exception:
+                pass
 
     def _set_menu_message(self, text: str, duration_s: float = 1.2) -> None:
         self.menu_message = text
@@ -616,6 +679,9 @@ class GravityRunner:
                 pass
 
     def update(self, dt: float) -> None:
+        # Clamp huge frame jumps to keep gameplay stable when the app hiccups.
+        dt = min(dt, 0.045)
+        self.dt_smooth = self.dt_smooth + (dt - self.dt_smooth) * 0.08
         # Global timers.
         if self.flip_cooldown > 0:
             self.flip_cooldown = max(0.0, self.flip_cooldown - dt)
@@ -638,12 +704,24 @@ class GravityRunner:
             base_run_score = int(self.distance / SCORE_DIVISOR_PX) + self.click_score_base
             mult = self._score_multipliers.get(self.difficulty_mode, 1)
             self.score = base_run_score * mult
+            self._update_runtime_event(dt)
 
             # Update player physics.
-            self.player.update(dt, ceiling_y=self.ceiling_y, floor_y=self.floor_y)
+            self.player.update(
+                dt,
+                ceiling_y=self.ceiling_y,
+                floor_y=self.floor_y,
+                gravity_scale=self.event_low_gravity_scale,
+            )
 
             # Spawn/maintain obstacles.
-            self.generator.update(camera_x=self.distance, ceiling_y=self.ceiling_y, floor_y=self.floor_y)
+            self.generator.update(
+                camera_x=self.distance,
+                ceiling_y=self.ceiling_y,
+                floor_y=self.floor_y,
+                event_name=self.active_event_name,
+                event_strength=self.event_pulse_strength,
+            )
 
             # Collisions with gates.
             for g in self.generator.gates:
@@ -774,6 +852,45 @@ class GravityRunner:
             pygame.draw.circle(overlay, (*col, alpha), (int(self.player.x), int(self.player.y)), radius, width=3)
             self.logical_surface.blit(overlay, (0, 0))
 
+        # Strong event visuals so player instantly knows what's active.
+        if self.phase == GamePhase.running and self.active_event_name:
+            ev_overlay = pygame.Surface((LOGICAL_WIDTH, LOGICAL_HEIGHT), pygame.SRCALPHA)
+            pulse = 0.5 + 0.5 * math.sin(time_s * 8.0)
+            if self.active_event_name == "pulse_gates":
+                ev_col = self.active_skin_theme.accent
+            else:
+                ev_col = self.active_skin_theme.player_up
+            ev_alpha = int(20 + 18 * pulse)
+            ev_overlay.fill((*ev_col, ev_alpha))
+            self.logical_surface.blit(ev_overlay, (0, 0))
+            if self.active_event_name == "pulse_gates":
+                wave = pygame.Surface((LOGICAL_WIDTH, LOGICAL_HEIGHT), pygame.SRCALPHA)
+                cx = LOGICAL_WIDTH // 2
+                cy = LOGICAL_HEIGHT // 2
+                for i in range(3):
+                    rr = int(90 + i * 55 + 18 * math.sin(time_s * 6.0 + i * 0.8))
+                    aa = max(20, 95 - i * 22)
+                    pygame.draw.circle(wave, (*ev_col, aa), (cx, cy), rr, width=3)
+                self.logical_surface.blit(wave, (0, 0))
+            if self.active_event_intro_timer > 0.0:
+                intro = min(1.0, self.active_event_intro_timer / 1.1)
+                txt = "PULSE GATES!" if self.active_event_name == "pulse_gates" else "LOW GRAVITY!"
+                subtitle = (
+                    "GAPS PULSE: NARROW <-> WIDE"
+                    if self.active_event_name == "pulse_gates"
+                    else "LIGHTER GRAVITY, LONGER FLOAT"
+                )
+                glow = pygame.Surface((LOGICAL_WIDTH, 110), pygame.SRCALPHA)
+                g_alpha = int(130 * intro)
+                pygame.draw.rect(glow, (*ev_col, g_alpha), pygame.Rect(60, 20, LOGICAL_WIDTH - 120, 70), border_radius=16)
+                self.logical_surface.blit(glow, (0, 0))
+                label = self.fonts.medium.render(txt, True, (255, 255, 255))
+                rect = label.get_rect(center=(LOGICAL_WIDTH // 2, 55))
+                self.logical_surface.blit(label, rect)
+                sub = self.fonts.small.render(subtitle, True, (245, 245, 245))
+                sub_rect = sub.get_rect(center=(LOGICAL_WIDTH // 2, 84))
+                self.logical_surface.blit(sub, sub_rect)
+
         # UI by phase.
         if self.phase == GamePhase.menu:
             skin_items: list[MenuSkinItemView] = [
@@ -831,6 +948,11 @@ class GravityRunner:
                 difficulty_label=self.difficulty_mode.upper(),
                 score_multiplier=self._score_multipliers.get(self.difficulty_mode, 1),
                 credits=self.credits,
+                active_event_label=(
+                    "PULSE GATES (GAPS MOVE)" if self.active_event_name == "pulse_gates"
+                    else ("LOW GRAVITY" if self.active_event_name == "low_gravity" else None)
+                ),
+                active_event_remaining_s=self.active_event_timer,
             )
         elif self.phase == GamePhase.game_over:
             remaining = max(0.0, self.death_timer)
@@ -862,9 +984,8 @@ class GravityRunner:
             self.logical_surface,
             (max(1, int(LOGICAL_WIDTH * sc.scale)), max(1, int(LOGICAL_HEIGHT * sc.scale))),
         )
-        # Fill letterbox areas with a stretched backdrop to avoid black side bars.
-        backdrop = pygame.transform.smoothscale(self.logical_surface, (win_w, win_h))
-        self.window.blit(backdrop, (0, 0))
+        # Fill letterbox with theme color (cheaper than full-frame backdrop scaling).
+        self.window.fill(BG_DARK)
         self.window.blit(scaled, (sc.offset_x + shake_x, sc.offset_y + shake_y))
         pygame.display.flip()
 
@@ -955,6 +1076,8 @@ class GravityRunner:
                                 self.pause_selected = (self.pause_selected - 1) % 2
                             elif event.key in (pygame.K_DOWN, pygame.K_s):
                                 self.pause_selected = (self.pause_selected + 1) % 2
+                            elif event.key == pygame.K_SPACE:
+                                self.phase = GamePhase.running
                             elif event.key in (pygame.K_RETURN, pygame.K_KP_ENTER):
                                 if self.pause_selected == 0:
                                     self.phase = GamePhase.running
